@@ -32,10 +32,7 @@ class RMSNorm(torch.nn.Module):
 
     def _norm(self, x):
         """
-        Compute the root mean square normalization. Use Equation 4 under
-        Section 4 of https://arxiv.org/abs/1910.07467 as a reference. Add 
-        the given epsilon value (self.eps) to the tensor's norm (i.e. inside
-        the square root in Equation 4) before normalizing the tensor.
+        Compute the root mean square normalization.
 
         Args:
             x (torch.Tensor): The input tensor.
@@ -43,8 +40,19 @@ class RMSNorm(torch.nn.Module):
         Returns:
             torch.Tensor: The normalized tensor.
         """
-        # todo
-        raise NotImplementedError
+        # Compute the squared norm of the input tensor
+        squared_norm = torch.mean(x ** 2, dim=-1, keepdim=True)
+
+        # Add the epsilon value to the squared norm for numerical stability
+        squared_norm_eps = squared_norm + self.eps
+
+        # Compute the root mean square (RMS) by taking the square root
+        rms = torch.sqrt(squared_norm_eps)
+
+        # Normalize the input tensor by dividing it by the RMS
+        normalized_x = x / rms
+
+        return normalized_x
 
     def forward(self, x):
         """
@@ -83,18 +91,17 @@ class Attention(nn.Module):
                                        query: torch.Tensor,
                                        key: torch.Tensor,
                                        value: torch.Tensor) -> torch.Tensor:
-        '''
-        Jointly compute Scaled Dot Product Attention (see Section 3.2.1 in
-        https://arxiv.org/abs/1706.03762 for details). The query, key, and
-        value tensors each have shape (bs, n_local_heads, seqlen, head_dim).
-        An optimal implemention will jointly computing attention for multiple
-        heads (n_local_heads of them) at once using matrix/tensor operations.
+        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        # scores shape: (bs, n_local_heads, seqlen)
 
-        Make sure to use attention_dropout (self.attn_dropout) on the computed
-        attention matrix before applying it to the value tensor.
-        '''
-        # todo
-        raise NotImplementedError
+        # compute attention probabilities
+        probs = torch.softmax(scores, dim=-1)
+        # probs shape: (bs, n_local_heads, seqlen)
+
+        output = torch.matmul(probs, value)
+        # output shape: (bs, n_local_heads, seqlen, head_dim)
+
+        return output
 
     def forward(
         self,
@@ -182,22 +189,34 @@ class LlamaLayer(nn.Module):
         self.ffn_norm = RMSNorm(config.dim, eps=config.layer_norm_eps)
 
     def forward(self, x):
-        '''
-        This is the forward pass of the basic transformer building block. This is a
-        modernized version of the block shown on the left of Figure 1 on
-        https://arxiv.org/pdf/1706.03762.pdf.
+        """
+        This is the forward pass of the basic transformer building block.
 
-        The transformer block should consist of:
-        1) layer normalization of the input (via Root Mean Square layer normalization)
-        2) self-attention on the layer-normalized input
-        3) a residual connection (i.e., add the input to the output of the self-attention)
-        3) layer normalization on the output of the self-attention
-        4) a feed-forward network on the layer-normalized output of the self-attention
-        5) add a residual connection from the unnormalized self-attention output to the
-           output of the feed-forward network
-        '''
-        # todo
-        raise NotImplementedError
+        Args:
+            x (torch.Tensor): The input tensor.
+
+        Returns:
+            torch.Tensor: The output tensor after applying the transformer block.
+        """
+        # Step 1: Layer normalization of the input
+        x_norm = self.attention_norm(x)
+
+        # Step 2: Self-attention on the layer-normalized input
+        attention_output = self.attention(x_norm)
+
+        # Step 3: Residual connection (add the input to the output of the self-attention)
+        x = x + attention_output
+
+        # Step 4: Layer normalization on the output of the self-attention
+        x_norm = self.ffn_norm(x)
+
+        # Step 5: Feed-forward network on the layer-normalized output of the self-attention
+        ffn_output = self.feed_forward(x_norm)
+
+        # Step 6: Residual connection (add the unnormalized self-attention output to the output of the feed-forward network)
+        x = x + ffn_output
+
+        return x
 
 class Llama(LlamaPreTrainedModel):
     def __init__(self, config: LlamaConfig):
@@ -261,38 +280,33 @@ class Llama(LlamaPreTrainedModel):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        We perform this generation using basic temperature sampling. Note that we are not using
-        nucleus sampling (i.e. limiting ourselves to sampling from the top-k most probable tokens
-        at each timestep), though this is often used in conjunction with temperature sampling,
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
-        Also note this is a super inefficient version of sampling with no key/value cache.
+        We perform this generation using basic temperature sampling.
         """
         for _ in range(max_new_tokens):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.params.max_seq_len else idx[:, -self.params.max_seq_len:]
             # forward the model to get the logits for the index in the sequence
             logits, _ = self(idx_cond)
-            logits = logits[:, -1, :] # crop to just the final time step
-            # todo
-            raise NotImplementedError
+            logits = logits[:, -1, :]  # crop to just the final time step
 
             if temperature == 0.0:
                 # select the single most likely index
-                idx_next = None
+                idx_next = logits.argmax(dim=-1, keepdim=True)
             else:
-                '''
-                Perform temperature sampling:
-                1) identify  the logits at the final step.
-                2) scale (divide) these probabilities by the given temperature.
-                3) normalize the scaled logits with a softmax to obtain scaled probabilities.
-                4) sample from the scaled probability distribution.
+                # Step 1: Identify the logits at the final step
+                logits = logits[:, -1, :]
 
-                Note that we are not using top-k sampling/nucleus sampling in this procedure.
-                '''
-                idx_next = None
+                # Step 2: Scale the logits by the given temperature
+                scaled_logits = logits / temperature
+
+                # Step 3: Normalize the scaled logits with a softmax to obtain scaled probabilities
+                scaled_probs = torch.softmax(scaled_logits, dim=-1)
+
+                # Step 4: Sample from the scaled probability distribution
+                idx_next = torch.multinomial(scaled_probs, num_samples=1)
+
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
-
 
         return idx
 
