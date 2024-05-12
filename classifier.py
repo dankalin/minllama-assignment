@@ -47,12 +47,15 @@ class LlamaEmbeddingClassifier(torch.nn.Module):
 
 	def forward(self, input_ids):
 		'''
-		1) Find the hidden state after the final token of the input sequence
-		2) Apply dropout (self.dropout) to the hidden state at training time to mitigate
-		   overfitting.
-		2) Pass this through the classifier head (self.classifier_head), which will return
-		   logits (unnormalized probabilities) over all classes.
-		3) Take the log-softmax of the logits and return log-probabilities over all classes.
-		'''
-		# todo
-		raise NotImplementedError
+        1) Find the hidden state after the final token of the input sequence
+        2) Apply dropout (self.dropout) to the hidden state at training time to mitigate
+           overfitting.
+        2) Pass this through the classifier head (self.classifier_head), which will return
+           logits (unnormalized probabilities) over all classes.
+        3) Take the log-softmax of the logits and return log-probabilities over all classes.
+        '''
+		# 1) Find the hidden state after the final token of the input sequence
+		_, hidden_states = self.llama(input_ids)
+		hidden_state = self.dropout(hidden_states[:, -1, :])
+		logits = self.classifier_head(hidden_state)
+		return F.log_softmax(logits, dim=-1)

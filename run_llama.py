@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import torch
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import CosineAnnealingLR
+
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import classification_report, f1_score, recall_score, accuracy_score
 
@@ -162,6 +164,10 @@ def train(args):
 	lr = args.lr
 	## specify the optimizer
 	optimizer = AdamW(model.parameters(), lr=lr)
+
+	scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
+
+
 	best_dev_acc = 0
 
 	## run for the specified number of epochs
@@ -195,7 +201,7 @@ def train(args):
 			save_model(model, optimizer, args, config, args.filepath)
 
 		print(f"epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
-
+		scheduler.step()
 def generate_sentence(args, prefix, outfile, max_new_tokens = 75, temperature = 0.0):
 	with torch.no_grad():
 		device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
